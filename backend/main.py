@@ -28,7 +28,7 @@ app.add_middleware(
 # ─── Ollama config ───────────────────────────────────────────────────────────
 OLLAMA_URL   = "http://localhost:11434/api/generate"
 # Try llama3.2 first, fall back to llama3 or mistral
-OLLAMA_MODEL = "llama3.2"
+OLLAMA_MODEL = "qwen2.5-coder:7b"
 
 SYSTEM_PROMPT = (
     'Ты — движок игры "Toxic Cybercafe Admin". '
@@ -101,7 +101,10 @@ class GameState(BaseModel):
 
 class PlayerAction(BaseModel):
     pc_id:       int
-    action_type: Literal["text", "add_time", "reboot", "ban"]
+    action_type: Literal[
+        "text", "add_time", "reboot", "ban",
+        "give_food", "replace_hw", "turn_ac", "warn_neighbor", "fix_network", "discount"
+    ]
     text:        Optional[str] = None
 
 
@@ -224,8 +227,9 @@ def _tick(state: GameState) -> None:
         if pc.status != PCStatus.OCCUPIED:
             continue
 
-        # Decrease time
-        pc.minutes_left = max(0, pc.minutes_left - 1)
+        # Decrease time every 2nd tick
+        if state.tick % 2 == 0:
+            pc.minutes_left = max(0, pc.minutes_left - 1)
 
         # Client leaves if time runs out
         if pc.minutes_left <= 0:
@@ -242,25 +246,27 @@ def _tick(state: GameState) -> None:
         # Pending incident timeout penalty
         if pc.current_incident is not None:
             pc.incident_ticks += 1
-            if pc.incident_ticks == 3:
+            if pc.incident_ticks == 6:
                 add_message(state, pc.id, "system",
                             f"⚠️ {pc.client_name} ждёт ответа уже долго...")
-            if pc.incident_ticks > 2:
-                state.loyalty = max(0, state.loyalty - 5)
+            if pc.incident_ticks > 5:
+                state.loyalty = max(0, state.loyalty - 2)
 
     # Check game over
     if state.loyalty <= 0:
         state.game_over = True
         return
 
-    # 30% chance: generate incident on a random OCCUPIED PC without one
     occupied_no_incident = [
         p for p in state.pcs
         if p.status == PCStatus.OCCUPIED and p.current_incident is None
     ]
-    if occupied_no_incident and random.random() < 0.30:
+    # To make the first incident happen faster, if tick <= 3, the chance is 60%, otherwise 10%.
+    chance = 0.60 if state.tick <= 3 else 0.10
+    if occupied_no_incident and random.random() < chance:
         target = random.choice(occupied_no_incident)
         asyncio.create_task(generate_incident(target))
+
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -270,7 +276,6 @@ async def get_state():
     if not GAME_STATE.game_over:
         _tick(GAME_STATE)
     return GAME_STATE
-
 
 @app.post("/action", response_model=ActionResponse)
 async def post_action(action: PlayerAction):
@@ -287,6 +292,7 @@ async def post_action(action: PlayerAction):
         pc.incident_type    = None
         pc.incident_ticks   = 0
         GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 5)
+        GAME_STATE.score   += 50
         add_message(GAME_STATE, pc.id, "system", f"⏱ +1 час добавлен для {pc.client_name}")
         add_message(GAME_STATE, pc.id, "client",
                     random.choice(["о, норм! спасибо))", "ладно, ещё поиграю", "ок ок, зачёт"]))
@@ -300,6 +306,7 @@ async def post_action(action: PlayerAction):
         pc.incident_type    = None
         pc.incident_ticks   = 0
         GAME_STATE.loyalty  = max(0, GAME_STATE.loyalty - 3)
+        GAME_STATE.score   += 20
         add_message(GAME_STATE, pc.id, "system", f"🔄 ПК №{pc.id} перезагружается...")
         add_message(GAME_STATE, pc.id, "client",
                     random.choice(["ну и ладно...", "ладно, жду", "блин... ну ок"]))
@@ -314,10 +321,119 @@ async def post_action(action: PlayerAction):
         pc.incident_type    = None
         pc.incident_ticks   = 0
         GAME_STATE.loyalty  = max(0, GAME_STATE.loyalty - 15)
+        GAME_STATE.score    = max(0, GAME_STATE.score - 100)
         add_message(GAME_STATE, pc.id, "system", f"🚫 {kicked_name} кикнут с ПК №{pc.id}")
         if GAME_STATE.loyalty <= 0:
             GAME_STATE.game_over = True
         return ActionResponse(ok=True, loyalty_delta=-15, new_loyalty=GAME_STATE.loyalty)
+
+    # ── give_food ─────────────────────────────────────────────────
+    if action.action_type == "give_food":
+        if pc.incident_type == "hungry":
+            pc.current_incident = None
+            pc.incident_type    = None
+            pc.incident_ticks   = 0
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 12)
+            GAME_STATE.score   += 120
+            add_message(GAME_STATE, pc.id, "system", f"🍔 Доширак и Энергетик доставлены на ПК №{pc.id}")
+            add_message(GAME_STATE, pc.id, "client", "Ооо, наконец-то! Дошик горячий, кайф! Спасибо, админ! Вы лучший!")
+            return ActionResponse(ok=True, loyalty_delta=12, new_loyalty=GAME_STATE.loyalty)
+        else:
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 2)
+            GAME_STATE.score   += 20
+            add_message(GAME_STATE, pc.id, "system", f"🍔 Вы угостили {pc.client_name} сухариками за счет заведения")
+            add_message(GAME_STATE, pc.id, "client", "О, подгончик! Сенькс, админ!")
+            return ActionResponse(ok=True, loyalty_delta=2, new_loyalty=GAME_STATE.loyalty)
+
+    # ── replace_hw ────────────────────────────────────────────────
+    if action.action_type == "replace_hw":
+        if pc.incident_type in ["mouse_broken", "pc_noise"]:
+            pc.current_incident = None
+            pc.incident_type    = None
+            pc.incident_ticks   = 0
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 10)
+            GAME_STATE.score   += 100
+            add_message(GAME_STATE, pc.id, "system", f"🔌 Девайс/Комплектующие успешно заменены на ПК №{pc.id}")
+            add_message(GAME_STATE, pc.id, "client", "Кайф, теперь мышка кликает шикарно и кулер не жужжит! Погнали тащить!")
+            return ActionResponse(ok=True, loyalty_delta=10, new_loyalty=GAME_STATE.loyalty)
+        else:
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 1)
+            add_message(GAME_STATE, pc.id, "system", f"🔌 Вы протерли монитор и проверили кабели на ПК №{pc.id}")
+            add_message(GAME_STATE, pc.id, "client", "Эм, спасибо конечно, но у меня и так всё нормально работало.")
+            return ActionResponse(ok=True, loyalty_delta=1, new_loyalty=GAME_STATE.loyalty)
+
+    # ── turn_ac ───────────────────────────────────────────────────
+    if action.action_type == "turn_ac":
+        if pc.incident_type in ["neighbor_smell", "hungry"]:
+            pc.current_incident = None
+            pc.incident_type    = None
+            pc.incident_ticks   = 0
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 10)
+            GAME_STATE.score   += 100
+            add_message(GAME_STATE, pc.id, "system", f"❄️ Включена вентиляция и освежитель около ПК №{pc.id}")
+            add_message(GAME_STATE, pc.id, "client", "Фууух, пошел свежий воздух! А то дышать было нечем от этого соседа.")
+            return ActionResponse(ok=True, loyalty_delta=10, new_loyalty=GAME_STATE.loyalty)
+        else:
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 2)
+            GAME_STATE.score   += 20
+            add_message(GAME_STATE, pc.id, "system", f"❄️ Вы включили кондиционер на полную мощность в зале")
+            add_message(GAME_STATE, pc.id, "client", "О, прохлада пошла, зачет.")
+            return ActionResponse(ok=True, loyalty_delta=2, new_loyalty=GAME_STATE.loyalty)
+
+    # ── warn_neighbor ─────────────────────────────────────────────
+    if action.action_type == "warn_neighbor":
+        if pc.incident_type in ["neighbor_loud", "neighbor_smell"]:
+            pc.current_incident = None
+            pc.incident_type    = None
+            pc.incident_ticks   = 0
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 10)
+            GAME_STATE.score   += 100
+            add_message(GAME_STATE, pc.id, "system", f"🤫 Вы сделали строгое замечание нарушителю спокойствия")
+            add_message(GAME_STATE, pc.id, "client", "О, спасибо, он наконец-то притих. А то орал как резаный!")
+            return ActionResponse(ok=True, loyalty_delta=10, new_loyalty=GAME_STATE.loyalty)
+        else:
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 1)
+            add_message(GAME_STATE, pc.id, "system", f"🤫 Вы сделали профилактическое замечание окружающим")
+            add_message(GAME_STATE, pc.id, "client", "Та мы тихо сидим вообще, админ...")
+            return ActionResponse(ok=True, loyalty_delta=1, new_loyalty=GAME_STATE.loyalty)
+
+    # ── fix_network ───────────────────────────────────────────────
+    if action.action_type == "fix_network":
+        if pc.incident_type in ["lag", "game_wont_start"]:
+            pc.current_incident = None
+            pc.incident_type    = None
+            pc.incident_ticks   = 0
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 12)
+            GAME_STATE.score   += 120
+            add_message(GAME_STATE, pc.id, "system", f"🛜 Оптимизировано сетевое соединение и перезагружен игровой лаунчер")
+            add_message(GAME_STATE, pc.id, "client", "О! Пинг упал до 15! Стим обновился! Вот теперь можно тащить!")
+            return ActionResponse(ok=True, loyalty_delta=12, new_loyalty=GAME_STATE.loyalty)
+        else:
+            GAME_STATE.loyalty  = max(0, GAME_STATE.loyalty - 3)
+            GAME_STATE.score    = max(0, GAME_STATE.score - 10)
+            add_message(GAME_STATE, pc.id, "system", f"🛜 Вы перезапустили общий роутер клуба без причины")
+            add_message(GAME_STATE, pc.id, "client", "Эй, инет моргнул во время катки! Какого черта, админ?!")
+            if GAME_STATE.loyalty <= 0:
+                GAME_STATE.game_over = True
+            return ActionResponse(ok=True, loyalty_delta=-3, new_loyalty=GAME_STATE.loyalty)
+
+    # ── discount ──────────────────────────────────────────────────
+    if action.action_type == "discount":
+        if pc.current_incident is not None:
+            pc.current_incident = None
+            pc.incident_type    = None
+            pc.incident_ticks   = 0
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 15)
+            GAME_STATE.score    = max(0, GAME_STATE.score - 50)
+            add_message(GAME_STATE, pc.id, "system", f"🏷 {pc.client_name} на ПК №{pc.id} выдан промокод на бесплатный час")
+            add_message(GAME_STATE, pc.id, "client", "Халява! Ладно, прощаю косяки. Промокод активировал, играю дальше!")
+            return ActionResponse(ok=True, loyalty_delta=15, new_loyalty=GAME_STATE.loyalty)
+        else:
+            GAME_STATE.loyalty  = min(100, GAME_STATE.loyalty + 5)
+            GAME_STATE.score    = max(0, GAME_STATE.score - 20)
+            add_message(GAME_STATE, pc.id, "system", f"🏷 Вы выдали {pc.client_name} купон на скидку вхолостую")
+            add_message(GAME_STATE, pc.id, "client", "О, скидочка! Приятно, спасибо! Приду к вам еще!")
+            return ActionResponse(ok=True, loyalty_delta=5, new_loyalty=GAME_STATE.loyalty)
 
     # ── text ──────────────────────────────────────────────────────
     if action.action_type == "text" and action.text:
@@ -350,6 +466,9 @@ Few-shot примеры:
         resolved  = bool(result.get("incident_resolved", False))
 
         GAME_STATE.loyalty = max(0, min(100, GAME_STATE.loyalty + delta))
+        if delta > 0:
+            GAME_STATE.score += delta * 10
+
         if resolved:
             pc.current_incident = None
             pc.incident_type    = None
@@ -368,7 +487,6 @@ Few-shot примеры:
         )
 
     return ActionResponse(ok=False, new_loyalty=GAME_STATE.loyalty)
-
 
 @app.post("/restart")
 async def restart():

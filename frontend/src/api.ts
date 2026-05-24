@@ -8,7 +8,7 @@ export async function fetchState(): Promise<GameState> {
 
 export async function sendAction(
   pcId: number,
-  actionType: 'text' | 'add_time' | 'reboot' | 'ban',
+  actionType: 'text' | 'add_time' | 'reboot' | 'ban' | 'give_food' | 'replace_hw' | 'turn_ac' | 'warn_neighbor' | 'fix_network' | 'discount',
   text?: string
 ): Promise<ActionResponse> {
   const res = await fetch('/action', {

@@ -67,4 +67,5 @@ export const CLIENT_EMOJIS: Record<string, string> = {
 };
 
 // Polling interval ms
-export const POLL_INTERVAL = 3000;
+export const POLL_INTERVAL = 5000;
+
