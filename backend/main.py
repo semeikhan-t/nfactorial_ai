@@ -1,34 +1,47 @@
 """
 Toxic Cybercafe Admin — FastAPI Backend
-LLM: Ollama (local, no API key required)
+LLM: Ollama (local) or Google Gemini (cloud fallback)
 State: in-memory only
 """
 import asyncio
 import json
+import os
 import random
 import time
 from enum import Enum
 from typing import Literal, Optional
 
 import httpx
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+# Load environment variables from .env file for local development
+load_dotenv()
+
 # ─── App setup ──────────────────────────────────────────────────────────────
 app = FastAPI(title="Toxic Cybercafe Admin", docs_url="/docs")
 
+# Support dynamic origins via env (comma-separated). Default to all (*) for ease of deploy,
+# but can be locked down to specific domains like Vercel.
+env_origins = os.getenv("ALLOWED_ORIGINS")
+if env_origins:
+    origins = [o.strip() for o in env_origins.split(",") if o.strip()]
+else:
+    origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origins=origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ─── Ollama config ───────────────────────────────────────────────────────────
-OLLAMA_URL   = "http://localhost:11434/api/generate"
-# Try llama3.2 first, fall back to llama3 or mistral
-OLLAMA_MODEL = "qwen2.5-coder:7b"
+# ─── LLM config ──────────────────────────────────────────────────────────────
+OLLAMA_URL     = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 SYSTEM_PROMPT = (
     'Ты — движок игры "Toxic Cybercafe Admin". '
@@ -149,17 +162,39 @@ def add_message(state: GameState, pc_id: int, sender: str, text: str) -> None:
 
 
 async def call_llm(prompt: str) -> dict:
-    """Call Ollama with format=json for guaranteed JSON output."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(OLLAMA_URL, json={
-            "model":  OLLAMA_MODEL,
-            "prompt": SYSTEM_PROMPT + "\n\n" + prompt,
-            "stream": False,
-            "format": "json",
-        })
-        resp.raise_for_status()
-        data = resp.json()
-        return json.loads(data["response"])
+    """Call Google Gemini API (if key is set) or fallback to local Ollama."""
+    if GEMINI_API_KEY:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{
+                "parts": [{
+                    "text": SYSTEM_PROMPT + "\n\n" + prompt
+                }]
+            }],
+            "generationConfig": {
+                "responseMimeType": "application/json"
+            }
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            # Extract text from Gemini's response
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            return json.loads(text)
+    else:
+        # Local Ollama fallback
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(OLLAMA_URL, json={
+                "model":  OLLAMA_MODEL,
+                "prompt": SYSTEM_PROMPT + "\n\n" + prompt,
+                "stream": False,
+                "format": "json",
+            })
+            resp.raise_for_status()
+            data = resp.json()
+            return json.loads(data["response"])
 
 
 async def call_llm_safe(prompt: str, fallback_list: list) -> dict:
