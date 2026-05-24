@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Toxic Cybercafe Admin — Admin Console v2.7</title>
+    <meta name="description" content="Управляй компьютерным клубом. Отвечай на жалобы клиентов. Не дай лояльности упасть до нуля." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+
+      <!-- ══════════════ HEADER ══════════════ -->
+      <header id="header">
+        <div id="logo">
+          <span class="logo-icon">💀</span>
+          <div class="logo-text-group">
+            <span class="logo-text">TOXIC<span class="logo-accent">CAFE</span></span>
+            <span class="logo-sub">ADMIN CONSOLE v2.7</span>
+          </div>
+        </div>
+
+        <div id="loyalty-container">
+          <span class="loyalty-label">ЛОЯЛЬНОСТЬ</span>
+          <div id="loyalty-bar" title="Лояльность клиентов">
+            <div id="loyalty-fill"></div>
+          </div>
+          <span id="loyalty-text">100/100</span>
+        </div>
+
+        <div id="header-right">
+          <div id="header-clock" class="monospace">00:00:00</div>
+        </div>
+      </header>
+
+      <!-- ══════════════ MAIN ══════════════ -->
+      <main id="main">
+
+        <!-- Phaser canvas panel -->
+        <div id="game-panel">
+          <div id="game-container"></div>
+          <!-- PC quick-select dots (below game canvas) -->
+          <div id="pc-indicators"></div>
+        </div>
+
+        <!-- Chat panel (right) -->
+        <aside id="chat-panel">
+
+          <!-- PC header -->
+          <div id="pc-header">
+            <h2 id="pc-title">PC #1 — Дима</h2>
+            <div id="pc-status-badge" class="incident">🔴 ИНЦИДЕНТ</div>
+          </div>
+
+          <!-- Message feed -->
+          <div id="message-list" role="log" aria-live="polite" aria-label="Чат клиента"></div>
+
+          <!-- Loading indicator -->
+          <div id="loading-indicator" style="display:none;">
+            <span>Ждём ответ ИИ</span>
+            <div class="loading-dots">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div id="actions-panel">
+            <div id="quick-actions">
+              <button id="add-time-btn" class="action-btn btn-time" title="Добавить 1 час (+5 лояльности)">
+                <span class="btn-icon">⏱</span>
+                <span class="btn-label">+1 ЧАС</span>
+              </button>
+              <button id="reboot-btn" class="action-btn btn-reboot" title="Перезагрузить ПК (-3 лояльности)">
+                <span class="btn-icon">🔄</span>
+                <span class="btn-label">РЕБУТ</span>
+              </button>
+              <button id="ban-btn" class="action-btn btn-ban" title="Кикнуть клиента (-15 лояльности)">
+                <span class="btn-icon">🚫</span>
+                <span class="btn-label">БАН</span>
+              </button>
+            </div>
+
+            <div id="text-input-container">
+              <input
+                type="text"
+                id="text-input"
+                placeholder="Ответьте клиенту..."
+                maxlength="200"
+                autocomplete="off"
+                spellcheck="false"
+                aria-label="Ответ клиенту"
+              />
+              <button id="send-btn" aria-label="Отправить ответ">↑</button>
+            </div>
+
+            <div id="input-hint">Enter — отправить · ИИ оценит ваш ответ</div>
+          </div>
+
+        </aside>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
